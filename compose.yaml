@@ -1,0 +1,32 @@
+services:
+  app:
+    image: golang:1.27-alpine
+    working_dir: /app
+    environment:
+      CLICKHOUSE_ADDR: ${CLICKHOUSE_ADDR:-clickhouse:9000}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-golog}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-golog}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - .:/app
+    command:
+      - sh
+      - -c
+      - go build -o /tmp/go-log-server ./cmd/server && exec /tmp/go-log-server
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-golog}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-golog}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+volumes:
+  clickhouse_data:
