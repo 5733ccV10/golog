@@ -39,9 +39,10 @@ func runServer() (runErr error) {
 	}()
 	log.Println("Connected to ClickHouse.")
 
+	queue := make(chan storage.Entry, 20000)
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           apis.NewRouter(),
+		Handler:           apis.NewRouter(queue),
 		ReadTimeout:       29 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -50,30 +51,69 @@ func runServer() (runErr error) {
 	log.Printf("listening on %s", server.Addr)
 
 	ch := make(chan error, 1)
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- apis.ChannelWorker(workerCtx, db, queue)
+	}()
+
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			ch <- fmt.Errorf("http server failed: %w", err)
 		}
 	}()
 
+	workerStopped := false
 	select {
 	case err := <-ch:
-		return err
-
+		runErr = err
 	case <-ctx.Done():
-		shutDownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
-		)
-		defer cancel()
-
-		if err := server.Shutdown(shutDownCtx); err != nil {
-			if closeErr := server.Close(); closeErr != nil {
-				log.Printf("Forced server close failed: %v", closeErr)
-			}
-			return fmt.Errorf("Server forced to shutdown with error: %w", err)
+	case err := <-workerDone:
+		workerStopped = true
+		if err != nil {
+			runErr = fmt.Errorf("worker unable to process requests: %w", err)
+		} else {
+			runErr = errors.New("log worker stopped unexpectedly")
 		}
-
-		log.Println("HTTP server stopped cleanly.")
 	}
-	return nil
+
+	shutDownCtx, cancel := context.WithTimeout(
+		context.Background(), 5*time.Second,
+	)
+	defer cancel()
+
+	if err := server.Shutdown(shutDownCtx); err != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("HTTP shutdown failed: %w", err))
+		if closeErr := server.Close(); closeErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("forced HTTP close failed: %w", closeErr))
+		}
+		cancelWorker()
+	} else {
+		log.Println("HTTP server stopped cleanly.")
+		close(queue)
+	}
+
+	if workerStopped {
+		return runErr
+	}
+
+	select {
+	case err := <-workerDone:
+		if err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("log worker stopped: %w", err))
+		} else {
+			log.Println("Log worker stopped cleanly.")
+		}
+	case <-shutDownCtx.Done():
+		cancelWorker()
+		workerErr := <-workerDone
+		runErr = errors.Join(
+			runErr,
+			fmt.Errorf("worker shutdown timed out: %w", shutDownCtx.Err()),
+			workerErr,
+		)
+	}
+	return runErr
 }
