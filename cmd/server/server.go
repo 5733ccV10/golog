@@ -42,7 +42,7 @@ func runServer() (runErr error) {
 	queue := make(chan storage.Entry, 20000)
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           apis.NewRouter(queue),
+		Handler:           apis.NewRouter(queue, db),
 		ReadTimeout:       29 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
