@@ -18,5 +18,6 @@ func NewRouter(queue chan<- storage.Entry, db driver.Conn) *http.ServeMux {
 	mux.HandleFunc("GET /v1/logs", func(w http.ResponseWriter, r *http.Request) {
 		fetchLogsHandler(w, r, db)
 	})
+	mux.HandleFunc("GET /v1/logs/live-tail", liveTailHandler)
 	return mux
 }
